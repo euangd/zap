@@ -28,6 +28,7 @@ use crate::terminal::model::block::{
     formatted_terminal_contents_for_input, Block, BlockId, CURSOR_MARKER,
 };
 use crate::terminal::shell::ShellType;
+use crate::terminal::ssh::util::parse_interactive_ssh_command;
 use crate::{
     ai::agent::AIAgentActionResultType,
     terminal::{
@@ -259,12 +260,6 @@ impl ShellCommandExecutor {
         // Determine the action we want to take based on the input.
         let action_id = input.action.id.clone();
 
-        let command = model
-            .block_list()
-            .active_block()
-            .command_with_secrets_unobfuscated(false)
-            .clone();
-
         let handle = ctx.handle();
         match &input.action.action {
             AIAgentActionType::RequestCommandOutput {
@@ -311,7 +306,7 @@ impl ShellCommandExecutor {
                 drop(model);
 
                 ActionExecution::new_async(
-                    self.action_result_future(block_selector.clone(), None),
+                    self.action_result_future(block_selector.clone(), ActionResultDelay::Default),
                     move |result, ctx| {
                         // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
@@ -370,7 +365,7 @@ impl ShellCommandExecutor {
                 ActionExecution::new_async(
                     self.action_result_future(
                         block_selector.clone(),
-                        Some(ShellCommandDelay::Duration(Duration::from_millis(200))),
+                        ActionResultDelay::Duration(Duration::from_millis(200)),
                     ),
                     move |result, ctx| {
                         // Remove the senders from the maps.
@@ -404,11 +399,13 @@ impl ShellCommandExecutor {
                         },
                     ));
                 }
+                let command = block.command_with_secrets_unobfuscated(false);
+                let delay = effective_read_shell_command_delay(&command, delay.clone());
                 drop(model);
 
                 let block_selector = BlockSelector::Id(block_id.clone());
                 ActionExecution::new_async(
-                    self.action_result_future(block_selector.clone(), delay.clone()),
+                    self.action_result_future(block_selector.clone(), delay),
                     move |result, ctx| {
                         // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
@@ -546,7 +543,7 @@ impl ShellCommandExecutor {
     fn action_result_future(
         &mut self,
         block_selector: BlockSelector,
-        delay: Option<ShellCommandDelay>,
+        delay: ActionResultDelay,
     ) -> impl Spawnable<Output = ActionResult> {
         // Create a channel to notify us when we receive block metadata.
         let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
@@ -578,16 +575,16 @@ impl ShellCommandExecutor {
             // current state.  Otherwise, we'll wait indefinitely for the command to
             // finish executing.
             let mut timeout = match delay {
-                Some(ShellCommandDelay::Duration(duration)) => {
+                ActionResultDelay::Duration(duration) => {
                     // Enforce a maximum allowed delay that the agent may request, never waiting longer than MAX_AGENT_DELAY_DURATION.
                     // If the requested duration exceeds this cap, we'll still behave as if the agent may expect a running command,
                     // so there's no need to signal preemption (the agent already anticipates an incomplete command state).
                     Timer::after(duration.min(Self::MAX_AGENT_DELAY_DURATION))
                 }
-                Some(ShellCommandDelay::OnCompletion) => {
-                    Timer::after(Self::MAX_AGENT_DELAY_DURATION)
+                ActionResultDelay::OnCompletion { timeout } => {
+                    Timer::after(timeout.min(Self::MAX_AGENT_DELAY_DURATION))
                 }
-                None => Timer::after(Self::MAX_WAIT_DURATION),
+                ActionResultDelay::Default => Timer::after(Self::MAX_WAIT_DURATION),
             }
             .fuse();
 
@@ -614,8 +611,8 @@ impl ShellCommandExecutor {
             // true completion from a forced client poll (`ForceRefresh`) or a timeout during `on_completion`.
             let is_preempted = matches!(wake_reason, WakeReason::ForceRefresh)
                 || matches!(
-                    (&wake_reason, &delay),
-                    (WakeReason::Timeout, Some(ShellCommandDelay::OnCompletion))
+                    (wake_reason, delay),
+                    (WakeReason::Timeout, ActionResultDelay::OnCompletion { .. })
                 );
 
             // At this point, we've either received block metadata or we've timed out.
@@ -715,6 +712,126 @@ impl ShellCommandExecutor {
     ) -> BoxFuture<'static, ()> {
         futures::future::ready(()).boxed()
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ActionResultDelay {
+    Default,
+    Duration(Duration),
+    OnCompletion { timeout: Duration },
+}
+
+impl ActionResultDelay {
+    fn from_shell_command_delay(delay: Option<ShellCommandDelay>) -> Self {
+        match delay {
+            Some(ShellCommandDelay::Duration(duration)) => Self::Duration(duration),
+            Some(ShellCommandDelay::OnCompletion) => Self::OnCompletion {
+                timeout: ShellCommandExecutor::MAX_AGENT_DELAY_DURATION,
+            },
+            None => Self::Default,
+        }
+    }
+}
+
+fn effective_read_shell_command_delay(
+    command: &str,
+    delay: Option<ShellCommandDelay>,
+) -> ActionResultDelay {
+    if command_starts_non_terminating_session(command)
+        && matches!(delay, None | Some(ShellCommandDelay::OnCompletion))
+    {
+        return ActionResultDelay::OnCompletion {
+            timeout: ShellCommandExecutor::MAX_WAIT_DURATION,
+        };
+    }
+
+    ActionResultDelay::from_shell_command_delay(delay)
+}
+
+fn command_starts_non_terminating_session(command: &str) -> bool {
+    let command = command.trim_start();
+    in_band_generator_command(command)
+        .as_deref()
+        .is_some_and(command_starts_non_terminating_session)
+        || parse_interactive_ssh_command(command).is_some()
+        || normalized_ssh_command(command)
+            .as_deref()
+            .is_some_and(|command| parse_interactive_ssh_command(command).is_some())
+        || first_executable_name(command).is_some_and(|name| {
+            matches!(
+                name.as_str(),
+                "mosh" | "mosh.exe" | "sftp" | "sftp.exe" | "telnet" | "telnet.exe"
+            )
+        })
+}
+
+fn in_band_generator_command(command: &str) -> Option<String> {
+    let tokens = shell_words::split(command.trim_start()).ok()?;
+    if tokens.len() >= 3
+        && (tokens[0].eq_ignore_ascii_case("Warp-Run-GeneratorCommand")
+            || tokens[0] == "warp_run_generator_command")
+    {
+        Some(tokens[2].clone())
+    } else {
+        None
+    }
+}
+
+fn normalized_ssh_command(command: &str) -> Option<String> {
+    let (token, rest) = first_executable_token(command)?;
+    let name = command_basename(token);
+    if name.eq_ignore_ascii_case("ssh") || name.eq_ignore_ascii_case("ssh.exe") {
+        Some(format!("ssh{rest}"))
+    } else {
+        None
+    }
+}
+
+fn first_executable_name(command: &str) -> Option<String> {
+    let (token, _) = first_executable_token(command)?;
+    Some(command_basename(token).to_ascii_lowercase())
+}
+
+fn first_executable_token(command: &str) -> Option<(&str, &str)> {
+    let (token, rest) = first_command_token(command)?;
+    if token == "&" || token.eq_ignore_ascii_case("command") {
+        first_command_token(rest)
+    } else {
+        Some((token, rest))
+    }
+}
+
+fn first_command_token(command: &str) -> Option<(&str, &str)> {
+    let command = command.trim_start();
+    if command.is_empty() {
+        return None;
+    }
+
+    let mut chars = command.char_indices();
+    let Some((_, first)) = chars.next() else {
+        return None;
+    };
+    if first == '"' || first == '\'' {
+        for (idx, ch) in chars {
+            if ch == first {
+                let token = &command[first.len_utf8()..idx];
+                let rest = &command[idx + ch.len_utf8()..];
+                return Some((token, rest));
+            }
+        }
+
+        return Some((&command[first.len_utf8()..], ""));
+    }
+
+    let end = command.find(char::is_whitespace).unwrap_or(command.len());
+    Some((&command[..end], &command[end..]))
+}
+
+fn command_basename(command_token: &str) -> &str {
+    command_token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(command_token)
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -944,3 +1061,7 @@ enum ActionResult {
     Cancelled,
     BlockNotFound,
 }
+
+#[cfg(test)]
+#[path = "shell_command_tests.rs"]
+mod tests;
