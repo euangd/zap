@@ -1,6 +1,6 @@
-#include "WarpDockTilePlugin.h"
+#include "ZapDockTilePlugin.h"
 
-@implementation WarpDockTilePlugIn {
+@implementation ZapDockTilePlugIn {
     NSFileHandle *_logFileHandle;
 }
 
@@ -25,11 +25,11 @@
             NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
             [formatter setDateFormat:@"yyyy-MM-dd_HH-mm-ss"];
             NSString *timestamp = [formatter stringFromDate:[NSDate date]];
-            NSString *logPath = [NSString stringWithFormat:@"/tmp/warp_docktile_%@.log", timestamp];
+            NSString *logPath = [NSString stringWithFormat:@"/tmp/zap_docktile_%@.log", timestamp];
             NSError *error = nil;
             [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];
             _logFileHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
-            [self logMessage:@"WarpDockTilePlugin initialized"];
+            [self logMessage:@"ZapDockTilePlugin initialized"];
         } @catch (NSException *exception) {
             NSLog(@"Exception during initialization: %@\nStack trace: %@", 
                   exception.reason, 
@@ -137,14 +137,14 @@
     return [[NSImage alloc] initWithContentsOfFile:imagePath];
 }
 
-// Protocol method that is invoked by the system when the dock for Warp is updated.
+// Protocol method that is invoked by the system when the dock for Zap is updated.
 // Note that we listen for direct changes to the AppIcon key in the user defaults.
 - (void)setDockTile:(NSDockTile *)dockTile {
     @try {
         [self logMessage:[NSString stringWithFormat:@"setDockTile called with tile: %@", dockTile ? @"valid" : @"nil"]];
         if (dockTile) {
             // Get the bundle ID for setting up user defaults observation
-            NSBundle *pluginBundle = [NSBundle bundleForClass:[WarpDockTilePlugIn class]];    
+            NSBundle *pluginBundle = [NSBundle bundleForClass:[ZapDockTilePlugIn class]];    
             NSString *path = [[pluginBundle bundlePath] stringByAppendingPathComponent:@"Contents/Info.plist"];
             NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];    
             NSString *bundleId = dict[@"MainAppBundleIdentifier"];
@@ -182,7 +182,7 @@
 
 - (void)dealloc {
     @try {
-        [self logMessage:@"WarpDockTilePlugin deallocating"];
+        [self logMessage:@"ZapDockTilePlugin deallocating"];
         if (self.iconChangedObserver) {
             [[NSDistributedNotificationCenter defaultCenter] removeObserver:self.iconChangedObserver];
             self.iconChangedObserver = nil;

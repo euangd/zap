@@ -212,6 +212,14 @@ if (-Not $?) {
 }
 
 Write-Output 'Building Zap installer'
+# Inno Setup `AppId` 决定注册表 Uninstall 条目与升级跟踪键。OSS 下固定为 `zap-oss`,
+# 避免留在默认的 `warp-terminal-oss` 上。其他 channel 走 .iss 里的默认
+# `warp-terminal-{ReleaseChannel}`。
+if ("$CHANNEL" -eq 'oss') {
+    $INNO_APP_ID = 'zap-oss'
+} else {
+    $INNO_APP_ID = "warp-terminal-$CHANNEL"
+}
 $ISCC_ARGS = @(
     "$WINDOWS_INSTALLER_DIR\windows-installer.iss",
     "/DReleaseChannel=$CHANNEL",
@@ -221,7 +229,8 @@ $ISCC_ARGS = @(
     "/DMyAppVersion=$env:GIT_RELEASE_TAG",
     "/DArch=$ARCH",
     "/DOutputName=$INSTALLER_NAME",
-    "/DAppUserModelId=$AUMID"
+    "/DAppUserModelId=$AUMID",
+    "/DInnoAppId=$INNO_APP_ID"
 )
 # Also accept the sign tool command via env var
 if (-not $SIGN_TOOL_CMD -and $env:SIGN_TOOL_CMD) {

@@ -14,6 +14,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 
@@ -54,11 +55,15 @@ impl ServerConversationToken {
     }
 
     pub fn debug_link(&self) -> String {
-        format!("warp://debug/maa/{}", self.as_str())
+        format!("{}://debug/maa/{}", ChannelState::url_scheme(), self.as_str())
     }
 
     pub fn conversation_link(&self) -> String {
-        format!("warp://conversation/{}", self.as_str())
+        format!(
+            "{}://conversation/{}",
+            ChannelState::url_scheme(),
+            self.as_str()
+        )
     }
 }
 

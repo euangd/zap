@@ -40,7 +40,11 @@
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId=warp-terminal-{#ReleaseChannel}
+; bundle.ps1 会为 OSS 传入 `InnoAppId=zap-oss`,其他 channel 走默认的 `warp-terminal-{ReleaseChannel}`。
+#ifndef InnoAppId
+  #define InnoAppId "warp-terminal-" + ReleaseChannel
+#endif
+AppId={#InnoAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
