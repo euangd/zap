@@ -72,17 +72,17 @@ import TabsCard from '../../components/docs/TabsCard.astro';
 <div class="callout info">
   <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6"/><path d="M8 7v4M8 5h.01"/></svg>
   <div>
-    <span data-lang="en">The original Zap bootstrap also runs <code>gcloud auth login</code> for upstream's internal SSH integration tests. Zap's OSS build doesn't need it — you can ignore that prompt or skip the <code>gcloud</code> sections.</span>
-    <span data-lang="zh">上游 Zap 的 bootstrap 脚本还会执行 <code>gcloud auth login</code>,用于其内部的 SSH 集成测试。Zap 的 OSS 构建不依赖此步骤,可忽略相关提示或直接跳过 <code>gcloud</code> 相关流程。</span>
-    <span data-lang="ja">元の Zap bootstrap は、上流の内部 SSH 統合テスト向けに <code>gcloud auth login</code> も実行します。Zap の OSS ビルドでは不要なので、そのプロンプトは無視するか <code>gcloud</code> 関連部分を飛ばして構いません。</span>
+    <span data-lang="en">The original Warp bootstrap also runs <code>gcloud auth login</code> for upstream's internal SSH integration tests. Zap's OSS build doesn't need it — you can ignore that prompt or skip the <code>gcloud</code> sections.</span>
+    <span data-lang="zh">上游 Warp 的 bootstrap 脚本还会执行 <code>gcloud auth login</code>,用于其内部的 SSH 集成测试。Zap 的 OSS 构建不依赖此步骤,可忽略相关提示或直接跳过 <code>gcloud</code> 相关流程。</span>
+    <span data-lang="ja">元の Warp bootstrap は、上流の内部 SSH 統合テスト向けに <code>gcloud auth login</code> も実行します。Zap の OSS ビルドでは不要なので、そのプロンプトは無視するか <code>gcloud</code> 関連部分を飛ばして構いません。</span>
   </div>
 </div>
 
 ## 3. Build & run
 
-<p data-lang="en">Zap ships two binaries: <code>zap-oss</code> (no cloud-bound features compiled in — the right target for community builds) and <code>warp</code> (Zap Inc.'s internal channel, requires their private channel config). Use <code>zap-oss</code>.</p>
-<p data-lang="zh">Zap 提供两个二进制文件:<code>zap-oss</code>(已移除全部云端能力,社区构建请使用此版本)与 <code>warp</code>(Zap Inc. 内部 channel,依赖其私有 channel 配置)。请使用 <code>zap-oss</code>。</p>
-<p data-lang="ja">Zap には 2 つのバイナリがあります。<code>zap-oss</code> はクラウド依存機能を含まないコミュニティビルド向けのターゲットで、<code>warp</code> は Zap Inc. の内部チャンネル用で非公開のチャンネル設定が必要です。<code>zap-oss</code> を使ってください。</p>
+<p data-lang="en">Zap ships two binaries: <code>zap-oss</code> (no cloud-bound features compiled in — the right target for community builds) and <code>warp</code> (Warp Inc.'s internal channel, requires their private channel config). Use <code>zap-oss</code>.</p>
+<p data-lang="zh">Zap 提供两个二进制文件:<code>zap-oss</code>(已移除全部云端能力,社区构建请使用此版本)与 <code>warp</code>(Warp Inc. 内部 channel,依赖其私有 channel 配置)。请使用 <code>zap-oss</code>。</p>
+<p data-lang="ja">Zap には 2 つのバイナリがあります。<code>zap-oss</code> はクラウド依存機能を含まないコミュニティビルド向けのターゲットで、<code>warp</code> は Warp Inc. の内部チャンネル用で非公開のチャンネル設定が必要です。<code>zap-oss</code> を使ってください。</p>
 
 <TabsCard tabs={[
   {
