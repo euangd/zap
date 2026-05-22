@@ -678,22 +678,22 @@ impl ShellCommandExecutor {
     }
 
     pub(super) fn cancel_execution(&mut self, id: &AIAgentActionId, _ctx: &mut ModelContext<Self>) {
-        let terminal_model = self.terminal_model.lock();
-        let active_block = terminal_model.block_list().active_block();
-        if !active_block.is_active_and_long_running() {
-            return;
-        }
+        // RequestedCommand 路径以 action id 为 selector,无条件清理。
+        // 不能依赖 `is_active_and_long_running()` 守卫:命令派生后 ~50ms
+        // (LONG_RUNNING_COMMAND_DURATION_MS) 窗口内守卫为 false,会导致 senders 残留,
+        // 进而让 detached future 挂到命令真正结束才退出(对 wait_until_completion=true
+        // 即 ActionResultDelay::UntilCompletion 的影响尤其大)。
+        let requested_selector = BlockSelector::RequestedCommandId(id.clone());
+        self.block_finished_senders.remove(&requested_selector);
+        self.force_refresh_senders.remove(&requested_selector);
 
-        let selector = if active_block
-            .requested_command_action_id()
-            .is_some_and(|requested_command_id| requested_command_id == id)
-        {
-            BlockSelector::RequestedCommandId(id.clone())
-        } else {
-            BlockSelector::Id(active_block.id().clone())
-        };
-        self.block_finished_senders.remove(&selector);
-        self.force_refresh_senders.remove(&selector);
+        // 不再用 `BlockSelector::Id(active_block.id())` 做兜底清理。WriteToLRC /
+        // ReadShellCommandOutput / TransferShellCommandControlToUser 的 sender key 来
+        // 自 action 参数中的 block_id 或创建时的 active_block,与 cancel 时刻的
+        // active_block 不存在可靠对应:若用户在 action 派生后切换了 active block,
+        // 旧的 active-block 兜底就匹配不上;若没切换,清理也只是"偶发正确"。它们的
+        // sender 由各自 on_complete 回调在 future 自然结束时清理;如需即时清理需引入
+        // action_id → BlockSelector 反向索引,属于本 issue 之外的独立改动。
     }
 
     /// Force any in-flight poll for the given long-running command block to resolve
