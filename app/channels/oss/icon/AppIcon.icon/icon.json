@@ -1,15 +1,39 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-gray:0.00000,1.00000"
-  },
+  "fill" : "automatic",
   "groups" : [
     {
+      "blend-mode" : "normal",
+      "blur-material" : null,
+      "hidden" : false,
       "layers" : [
         {
-          "fill" : "automatic",
-          "glass" : false,
+          "blend-mode-specializations" : [
+            {
+              "value" : "normal"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "automatic"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "none"
+            }
+          ],
+          "glass" : true,
           "image-name" : "logo.svg",
           "name" : "logo",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
           "position" : {
             "scale" : 1.45,
             "translation-in-points" : [
@@ -19,10 +43,12 @@
           }
         }
       ],
+      "lighting" : "individual",
       "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
+        "kind" : "layer-color",
+        "opacity" : 0.7
       },
+      "specular" : true,
       "translucency" : {
         "enabled" : true,
         "value" : 0.5
