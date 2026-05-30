@@ -2816,6 +2816,13 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
 
     // path == "/" 或为空 → 用户只填了 host,自动补上 api_type 默认版本路径段。
     if parsed.path() == "/" || parsed.path().is_empty() {
+        if parsed
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("api.githubcopilot.com"))
+        {
+            let host_part = trimmed.trim_end_matches('/');
+            return format!("{host_part}/");
+        }
         // 从 default_base_url 抽 path 部分(如 "/v1/" / "/v1beta/" / "/")。
         let default_path = url::Url::parse(api_type.default_base_url())
             .ok()
@@ -7231,5 +7238,31 @@ mod issue_94_task_linearization_tests {
             "request_id 不同的两轮 user 消息都要保留"
         );
         assert_eq!(message_ids(&out), vec!["m1", "m2", "m3"]);
+    }
+
+    #[test]
+    fn normalize_endpoint_url_keeps_copilot_root_without_v1() {
+        assert_eq!(
+            normalize_endpoint_url(
+                AgentProviderApiType::OpenAi,
+                "https://api.githubcopilot.com"
+            ),
+            "https://api.githubcopilot.com/"
+        );
+        assert_eq!(
+            normalize_endpoint_url(
+                AgentProviderApiType::OpenAi,
+                "https://api.githubcopilot.com/"
+            ),
+            "https://api.githubcopilot.com/"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_url_keeps_regular_openai_hosts_on_v1() {
+        assert_eq!(
+            normalize_endpoint_url(AgentProviderApiType::OpenAi, "https://api.openai.com"),
+            "https://api.openai.com/v1/"
+        );
     }
 }

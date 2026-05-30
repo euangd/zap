@@ -692,6 +692,8 @@ pub enum AgentProviderAuthKind {
     ApiKey,
     /// Codex CLI / ChatGPT OAuth 登录。
     CodexOAuth,
+    /// GitHub Copilot / GitHub Models 登录。
+    CopilotOAuth,
 }
 
 /// Provider 级别的 reasoning effort(思考深度)偏好。

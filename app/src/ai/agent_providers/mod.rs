@@ -13,6 +13,7 @@ pub mod active_ai;
 pub mod attachment_caps;
 pub mod chat_stream;
 pub mod codex_oauth;
+pub mod copilot_oauth;
 pub mod llm_id;
 pub mod models_dev;
 pub mod oneshot;
@@ -194,6 +195,13 @@ pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<ByopLookup> {
                 .get(&provider_id)
                 .filter(|c| !c.is_expired_or_expiring_soon())?;
             extra_headers.extend(codex_oauth::request_headers(&credentials.account_id));
+            credentials.access_token.clone()
+        }
+        AgentProviderAuthKind::CopilotOAuth => {
+            let credentials = AgentProviderOAuthSecrets::as_ref(app)
+                .get(&provider_id)
+                .filter(|c| !c.is_expired_or_expiring_soon())?;
+            extra_headers.extend(copilot_oauth::request_headers());
             credentials.access_token.clone()
         }
     };

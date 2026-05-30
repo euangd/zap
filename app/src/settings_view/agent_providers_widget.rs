@@ -269,6 +269,7 @@ impl ProviderDraftEditors {
 pub(super) struct AgentProvidersWidget {
     add_button_state: MouseStateHandle,
     codex_login_button_state: MouseStateHandle,
+    copilot_login_button_state: MouseStateHandle,
     refresh_catalog_button_state: MouseStateHandle,
     expand_chips_button_state: MouseStateHandle,
     /// 快速添加 chip 行的搜索框。
@@ -317,6 +318,7 @@ impl AgentProvidersWidget {
         Self {
             add_button_state: MouseStateHandle::default(),
             codex_login_button_state: MouseStateHandle::default(),
+            copilot_login_button_state: MouseStateHandle::default(),
             refresh_catalog_button_state: MouseStateHandle::default(),
             expand_chips_button_state: MouseStateHandle::default(),
             search_editor,
@@ -1005,7 +1007,10 @@ impl AgentProvidersWidget {
             label_color,
             appearance,
         );
-        let api_key_field = if matches!(provider.auth_kind, AgentProviderAuthKind::CodexOAuth) {
+        let api_key_field = if matches!(
+            provider.auth_kind,
+            AgentProviderAuthKind::CodexOAuth | AgentProviderAuthKind::CopilotOAuth
+        ) {
             field_block(
                 &crate::t!("settings-agent-providers-field-api-key"),
                 Text::new(
@@ -1458,19 +1463,111 @@ impl AgentProvidersWidget {
         .soft_wrap(true)
         .finish();
 
-        let login_button = Self::render_card_button(
-            crate::t!("settings-agent-providers-auth-login-login"),
-            self.codex_login_button_state.clone(),
-            AISettingsPageAction::StartCodexAuthLogin,
-            appearance,
-        );
-
         let body = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(title)
             .with_child(Container::new(description).with_margin_top(4.).finish())
             .with_child(
-                Container::new(login_button)
+                Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_child(
+                            Expanded::new(
+                                1.,
+                                Container::new(
+                                    Flex::column()
+                                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                                        .with_child(Text::new(
+                                            crate::t!(
+                                                "settings-agent-providers-auth-login-codex-title"
+                                            ),
+                                            appearance.ui_font_family(),
+                                            appearance.ui_font_size(),
+                                        )
+                                        .with_color(label_color.into())
+                                        .finish())
+                                        .with_child(
+                                            Container::new(Text::new(
+                                                crate::t!(
+                                                    "settings-agent-providers-auth-login-codex-description"
+                                                ),
+                                                appearance.ui_font_family(),
+                                                appearance.ui_font_size(),
+                                            )
+                                            .with_color(dim_color.into())
+                                            .soft_wrap(true)
+                                            .finish())
+                                            .with_margin_top(4.)
+                                            .finish(),
+                                        )
+                                        .with_child(
+                                            Container::new(Self::render_card_button(
+                                                crate::t!(
+                                                    "settings-agent-providers-auth-login-codex-login"
+                                                ),
+                                                self.codex_login_button_state.clone(),
+                                                AISettingsPageAction::StartCodexAuthLogin,
+                                                appearance,
+                                            ))
+                                            .with_margin_top(8.)
+                                            .finish(),
+                                        )
+                                        .finish(),
+                                )
+                                .with_margin_right(12.)
+                                .finish(),
+                            )
+                            .finish(),
+                        )
+                        .with_child(
+                            Expanded::new(
+                                1.,
+                                Container::new(
+                                    Flex::column()
+                                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                                        .with_child(Text::new(
+                                            crate::t!(
+                                                "settings-agent-providers-auth-login-copilot-title"
+                                            ),
+                                            appearance.ui_font_family(),
+                                            appearance.ui_font_size(),
+                                        )
+                                        .with_color(label_color.into())
+                                        .finish())
+                                        .with_child(
+                                            Container::new(Text::new(
+                                                crate::t!(
+                                                    "settings-agent-providers-auth-login-copilot-description"
+                                                ),
+                                                appearance.ui_font_family(),
+                                                appearance.ui_font_size(),
+                                            )
+                                            .with_color(dim_color.into())
+                                            .soft_wrap(true)
+                                            .finish())
+                                            .with_margin_top(4.)
+                                            .finish(),
+                                        )
+                                        .with_child(
+                                            Container::new(Self::render_card_button(
+                                                crate::t!(
+                                                    "settings-agent-providers-auth-login-copilot-login"
+                                                ),
+                                                self.copilot_login_button_state.clone(),
+                                                AISettingsPageAction::StartCopilotAuthLogin,
+                                                appearance,
+                                            ))
+                                            .with_margin_top(8.)
+                                            .finish(),
+                                        )
+                                        .finish(),
+                                )
+                                .finish(),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                )
                     .with_margin_top(8.)
                     .finish(),
             );
@@ -1663,7 +1760,7 @@ impl SettingsWidget for AgentProvidersWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "agent provider providers custom openai compatible deepseek glm moonshot dashscope qwen ollama base url api key models save 提供商 自定义 模型 保存"
+        "agent provider providers custom openai compatible deepseek glm moonshot dashscope qwen ollama copilot github oauth device auth login base url api key models save 提供商 自定义 模型 保存"
     }
 
     fn render(

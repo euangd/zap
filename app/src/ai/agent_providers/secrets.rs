@@ -103,6 +103,7 @@ impl SingletonEntity for AgentProviderSecrets {}
 #[serde(rename_all = "snake_case")]
 pub enum AgentProviderOAuthKind {
     Codex,
+    Copilot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
