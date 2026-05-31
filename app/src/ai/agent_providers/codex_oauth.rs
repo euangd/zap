@@ -16,7 +16,7 @@ use url::Url;
 
 use super::{AgentProviderOAuthCredentials, AgentProviderOAuthKind};
 
-pub const CODEX_PROVIDER_NAME: &str = "Codex Auth";
+pub const CODEX_PROVIDER_NAME: &str = "Codex OAuth";
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex/";
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";

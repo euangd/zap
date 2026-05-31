@@ -45,6 +45,7 @@ pub use secrets::{
 
 use std::collections::HashMap;
 
+use anyhow::Context as _;
 use settings::Setting;
 use warpui::{AppContext, SingletonEntity};
 
@@ -168,19 +169,60 @@ pub fn build_byop_models_by_feature(app: &AppContext) -> ModelsByFeature {
 
 #[derive(Debug, Clone)]
 pub struct ByopLookup {
+    pub provider_id: String,
     pub provider: AgentProvider,
     pub api_key: String,
     pub model_id: String,
     pub extra_headers: Vec<(String, String)>,
+    pub auth_kind: AgentProviderAuthKind,
+    pub oauth_credentials: Option<AgentProviderOAuthCredentials>,
+}
+
+pub struct OAuthRefreshResult {
+    pub credentials: AgentProviderOAuthCredentials,
+    pub api_key: String,
+    pub extra_headers: Vec<(String, String)>,
+}
+
+/// 对齐 opencode:每次真正发请求前检查 OAuth access token 是否需要刷新。
+/// 刷新成功后调用方负责把 `credentials` 写回安全存储。
+pub async fn refresh_oauth_credentials_if_needed(
+    auth_kind: AgentProviderAuthKind,
+    credentials: &AgentProviderOAuthCredentials,
+    provider_extra_headers: &[(String, String)],
+) -> anyhow::Result<Option<OAuthRefreshResult>> {
+    if !credentials.is_expired_or_expiring_soon() {
+        return Ok(None);
+    }
+
+    match auth_kind {
+        AgentProviderAuthKind::ApiKey => Ok(None),
+        AgentProviderAuthKind::CodexOAuth => {
+            let refreshed = codex_oauth::refresh_credentials(credentials)
+                .await
+                .context("Codex OAuth token refresh failed")?;
+            let mut extra_headers = provider_extra_headers.to_vec();
+            extra_headers.extend(codex_oauth::request_headers(&refreshed.account_id));
+            Ok(Some(OAuthRefreshResult {
+                api_key: refreshed.access_token.clone(),
+                credentials: refreshed,
+                extra_headers,
+            }))
+        }
+        AgentProviderAuthKind::CopilotOAuth => anyhow::bail!(
+            "Copilot OAuth token 已过期，请在设置里重新登录 Copilot Auth"
+        ),
+    }
 }
 
 /// 给定一个 BYOP `LLMId`,从 `AISettings` 与 secrets 里查出请求所需信息。
-/// 任一必要信息缺失返回 `None`(controller 调用方应映射为 `InvalidApiKey` 错误)。
+/// 任一必要信息缺失返回 `None`(controller 调用方应映射为认证错误)。
 pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<ByopLookup> {
     let (provider_id, model_id) = llm_id::decode(id)?;
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
     let provider = providers.into_iter().find(|p| p.id == provider_id)?;
     let mut extra_headers = provider.extra_headers.clone();
+    let mut oauth_credentials = None;
     let api_key = match provider.auth_kind {
         AgentProviderAuthKind::ApiKey => {
             // API key 可选:无 key 时返回空字符串,下游 build_client 会传给 genai
@@ -193,22 +235,29 @@ pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<ByopLookup> {
         AgentProviderAuthKind::CodexOAuth => {
             let credentials = AgentProviderOAuthSecrets::as_ref(app)
                 .get(&provider_id)
-                .filter(|c| !c.is_expired_or_expiring_soon())?;
+                .cloned()?;
             extra_headers.extend(codex_oauth::request_headers(&credentials.account_id));
-            credentials.access_token.clone()
+            let access_token = credentials.access_token.clone();
+            oauth_credentials = Some(credentials);
+            access_token
         }
         AgentProviderAuthKind::CopilotOAuth => {
             let credentials = AgentProviderOAuthSecrets::as_ref(app)
                 .get(&provider_id)
-                .filter(|c| !c.is_expired_or_expiring_soon())?;
+                .cloned()?;
             extra_headers.extend(copilot_oauth::request_headers());
-            credentials.access_token.clone()
+            let access_token = credentials.access_token.clone();
+            oauth_credentials = Some(credentials);
+            access_token
         }
     };
     Some(ByopLookup {
+        provider_id,
+        auth_kind: provider.auth_kind,
         provider,
         api_key,
         model_id,
         extra_headers,
+        oauth_credentials,
     })
 }

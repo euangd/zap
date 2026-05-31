@@ -3081,50 +3081,118 @@ impl BlocklistAIController {
         let terminal_view_id = self.terminal_view_id;
         let _ = ctx.spawn(
             async move {
+                let mut pending_title_generation = pending_title_generation;
+                let refreshed_credentials =
+                    match Self::refresh_pending_title_generation_oauth_if_needed(
+                        &mut pending_title_generation,
+                    )
+                    .await
+                    {
+                        Ok(refreshed_credentials) => refreshed_credentials,
+                        Err(e) => {
+                            return (None, pending_title_generation.task_id, Err(e));
+                        }
+                    };
                 let result = crate::ai::agent_providers::chat_stream::generate_title_via_byop(
                     &pending_title_generation.input,
                     &pending_title_generation.user_query,
                 )
                 .await;
-                (pending_title_generation.task_id, result)
+                (
+                    refreshed_credentials,
+                    pending_title_generation.task_id,
+                    result,
+                )
             },
-            move |_me, (task_id, result), ctx| match result {
-                Ok(Some(title)) => {
-                    log::info!("[byop] title generated: {title:?}");
-                    let client_actions = vec![ClientAction {
-                        action: Some(Action::UpdateTaskDescription(UpdateTaskDescription {
-                            task_id,
-                            description: title,
-                        })),
-                    }];
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                        match history_model.apply_client_actions(
-                            &stream_id,
-                            client_actions,
-                            conversation_id,
-                            terminal_view_id,
-                            ctx,
-                        ) {
-                            Ok(()) => {
-                                ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                                    terminal_view_id: Some(terminal_view_id),
-                                    conversation_id,
-                                });
-                            }
-                            Err(e) => {
-                                log::warn!("[byop] title update failed: {e:#}");
-                            }
-                        }
-                    });
+            move |_me, (refreshed_credentials, task_id, result), ctx| {
+                if let Some((provider_id, credentials)) = refreshed_credentials {
+                    crate::ai::agent_providers::AgentProviderOAuthSecrets::handle(ctx).update(
+                        ctx,
+                        |secrets, ctx| {
+                            secrets.set(&provider_id, credentials, ctx);
+                        },
+                    );
                 }
-                Ok(None) => {
-                    log::warn!("[byop] title gen returned empty content; skip");
-                }
-                Err(e) => {
-                    log::warn!("[byop] title gen failed: {e:#}; skip");
+                match result {
+                    Ok(Some(title)) => {
+                        log::info!("[byop] title generated: {title:?}");
+                        let client_actions = vec![ClientAction {
+                            action: Some(Action::UpdateTaskDescription(UpdateTaskDescription {
+                                task_id,
+                                description: title,
+                            })),
+                        }];
+                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                            match history_model.apply_client_actions(
+                                &stream_id,
+                                client_actions,
+                                conversation_id,
+                                terminal_view_id,
+                                ctx,
+                            ) {
+                                Ok(()) => {
+                                    ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                                        terminal_view_id: Some(terminal_view_id),
+                                        conversation_id,
+                                    });
+                                }
+                                Err(e) => {
+                                    log::warn!("[byop] title update failed: {e:#}");
+                                }
+                            }
+                        });
+                    }
+                    Ok(None) => {
+                        log::warn!("[byop] title gen returned empty content; skip");
+                    }
+                    Err(e) => {
+                        log::warn!("[byop] title gen failed: {e:#}; skip");
+                    }
                 }
             },
         );
+    }
+
+    async fn refresh_pending_title_generation_oauth_if_needed(
+        pending: &mut PendingTitleGeneration,
+    ) -> anyhow::Result<Option<(
+        String,
+        crate::ai::agent_providers::AgentProviderOAuthCredentials,
+    )>> {
+        let Some(credentials) = pending.oauth_credentials.clone() else {
+            return Ok(None);
+        };
+        if !credentials.is_expired_or_expiring_soon() {
+            return Ok(None);
+        }
+
+        match pending.auth_kind {
+            crate::settings::AgentProviderAuthKind::ApiKey => Ok(None),
+            crate::settings::AgentProviderAuthKind::CodexOAuth => {
+                let Some(refreshed) =
+                    crate::ai::agent_providers::refresh_oauth_credentials_if_needed(
+                        pending.auth_kind,
+                        &credentials,
+                        &pending.provider_extra_headers,
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow!(
+                            "Codex OAuth 标题生成刷新失败，请在设置里重新登录 Codex OAuth: {e:#}"
+                        )
+                    })?
+                else {
+                    return Ok(None);
+                };
+                pending.input.api_key = refreshed.api_key;
+                pending.input.extra_headers = refreshed.extra_headers;
+                pending.oauth_credentials = Some(refreshed.credentials.clone());
+                Ok(Some((pending.provider_id.clone(), refreshed.credentials)))
+            }
+            crate::settings::AgentProviderAuthKind::CopilotOAuth => Err(anyhow!(
+                "Copilot OAuth 标题生成凭据已过期，请在设置里重新登录 Copilot Auth"
+            )),
+        }
     }
 
     fn handle_response_stream_event(
