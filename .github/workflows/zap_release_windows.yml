@@ -1,0 +1,89 @@
+# Zap Windows x64 Release Pipeline — push tag (v*) to trigger
+
+name: Zap Release (Windows x64)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  release_windows:
+    name: Build Release (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: x64
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Build binary (unsigned)
+        id: build_binary
+        run: script/bundle -Channel $CHANNEL -skip_build_installer --arch x64
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ github.ref_name }}
+
+      - name: Bundle app (unsigned installer)
+        id: bundle_app
+        run: script/bundle -Channel $CHANNEL -skip_build_binary --arch x64
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ github.ref_name }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-windows-x64
+          path: ${{ steps.bundle_app.outputs.installer_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish_release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: release_windows
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          make_latest: "true"
+          files: dist/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete workflow artifacts
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq '.artifacts[].id')
+          for id in $ids; do
+            echo "Deleting artifact $id"
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
+          done
+        shell: bash
