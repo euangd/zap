@@ -28,18 +28,26 @@ pub(super) struct PendingTitleGeneration {
     pub(super) input: crate::ai::agent_providers::chat_stream::TitleGenInput,
     pub(super) user_query: String,
     pub(super) task_id: String,
+    pub(super) provider_id: String,
+    pub(super) auth_kind: crate::settings::AgentProviderAuthKind,
+    pub(super) oauth_credentials: Option<crate::ai::agent_providers::AgentProviderOAuthCredentials>,
+    pub(super) provider_extra_headers: Vec<(String, String)>,
 }
 
 struct ByopDispatch {
+    provider_id: String,
     base_url: String,
     api_key: String,
     model_id: String,
+    auth_kind: crate::settings::AgentProviderAuthKind,
+    oauth_credentials: Option<crate::ai::agent_providers::AgentProviderOAuthCredentials>,
     /// 显式指定的 API 协议类型,chat_stream 据此映射 genai AdapterKind。
     api_type: crate::settings::AgentProviderApiType,
     /// Provider 级 reasoning effort 偏好。`Auto` 时不向 genai 传 effort,
     /// 由 adapter 自己按模型名后缀推断;非 Auto 经 client capability gate 后注入。
     reasoning_effort: crate::settings::ReasoningEffortSetting,
     extra_headers: Vec<(String, String)>,
+    provider_extra_headers: Vec<(String, String)>,
     /// conversation 的 root task id — 必须用本地已注册的 id,
     /// 否则下游 `Action::AddMessagesToTask` 在 task_store 找不到会 `TaskNotFound`。
     root_task_id: String,
@@ -62,11 +70,22 @@ struct ByopDispatch {
 
 /// 标题生成专用的 BYOP 配置(可能与主 base 模型同 provider 也可能不同)。
 pub(crate) struct TitleGenParams {
+    pub provider_id: String,
     pub base_url: String,
     pub api_key: String,
     pub model_id: String,
+    pub auth_kind: crate::settings::AgentProviderAuthKind,
+    pub oauth_credentials: Option<crate::ai::agent_providers::AgentProviderOAuthCredentials>,
     pub api_type: crate::settings::AgentProviderApiType,
     pub reasoning_effort: crate::settings::ReasoningEffortSetting,
+    pub extra_headers: Vec<(String, String)>,
+    pub provider_extra_headers: Vec<(String, String)>,
+}
+
+struct ByopSpawnOutput {
+    refreshed_credentials:
+        Option<(String, crate::ai::agent_providers::AgentProviderOAuthCredentials)>,
+    stream_result: Result<api::ResponseStream, ConvertToAPITypeError>,
 }
 
 fn byop_dispatch_info(
@@ -74,9 +93,14 @@ fn byop_dispatch_info(
     ai_identifiers: &AIIdentifiers,
     ctx: &warpui::AppContext,
 ) -> Option<ByopDispatch> {
-    let (provider, api_key, model_id) =
-        crate::ai::agent_providers::lookup_byop(ctx, &params.model)?;
-    let extra_headers = provider.extra_headers.clone();
+    let lookup = crate::ai::agent_providers::lookup_byop(ctx, &params.model)?;
+    let provider_id = lookup.provider_id;
+    let auth_kind = lookup.auth_kind;
+    let oauth_credentials = lookup.oauth_credentials;
+    let provider = lookup.provider;
+    let model_id = lookup.model_id;
+    let provider_extra_headers = provider.extra_headers.clone();
+    let extra_headers = lookup.extra_headers;
     // 从 provider.models 里找当前模型条目,取其 context_window(tokens)。
     // 0 视为未填,后续走 None 分支 ⇒ chat_stream 不算占用率。
     let context_window = provider
@@ -104,31 +128,43 @@ fn byop_dispatch_info(
     let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
     let title_gen = if needs_create_task {
         let title_id = llm_prefs.get_active_title_model(ctx, None).id.clone();
-        crate::ai::agent_providers::lookup_byop(ctx, &title_id).map(
-            |(t_provider, t_api_key, t_model_id)| {
-                let t_effort =
-                    llm_prefs.get_reasoning_effort(None, t_provider.api_type, &t_model_id);
-                TitleGenParams {
-                    base_url: t_provider.base_url,
-                    api_key: t_api_key,
-                    model_id: t_model_id,
-                    api_type: t_provider.api_type,
-                    reasoning_effort: t_effort,
-                }
-            },
-        )
+        crate::ai::agent_providers::lookup_byop(ctx, &title_id).map(|t_lookup| {
+            let t_provider_id = t_lookup.provider_id;
+            let t_auth_kind = t_lookup.auth_kind;
+            let t_oauth_credentials = t_lookup.oauth_credentials;
+            let t_provider = t_lookup.provider;
+            let t_model_id = t_lookup.model_id;
+            let t_provider_extra_headers = t_provider.extra_headers.clone();
+            let t_effort = llm_prefs.get_reasoning_effort(None, t_provider.api_type, &t_model_id);
+            TitleGenParams {
+                provider_id: t_provider_id,
+                base_url: t_provider.base_url,
+                api_key: t_lookup.api_key,
+                model_id: t_model_id,
+                auth_kind: t_auth_kind,
+                oauth_credentials: t_oauth_credentials,
+                api_type: t_provider.api_type,
+                reasoning_effort: t_effort,
+                extra_headers: t_lookup.extra_headers,
+                provider_extra_headers: t_provider_extra_headers,
+            }
+        })
     } else {
         None
     };
 
     let reasoning_effort = llm_prefs.get_reasoning_effort(None, provider.api_type, &model_id);
     Some(ByopDispatch {
+        provider_id,
         base_url: provider.base_url,
-        api_key,
+        api_key: lookup.api_key,
         model_id,
+        auth_kind,
+        oauth_credentials,
         api_type: provider.api_type,
         reasoning_effort,
         extra_headers,
+        provider_extra_headers,
         root_task_id,
         target_task_id,
         needs_create_task,
@@ -159,9 +195,14 @@ fn pending_title_generation_from_byop(
             model_id: title_gen.model_id.clone(),
             api_type: title_gen.api_type,
             reasoning_effort: title_gen.reasoning_effort,
+            extra_headers: title_gen.extra_headers.clone(),
         },
         user_query,
         task_id: byop.root_task_id.clone(),
+        provider_id: title_gen.provider_id.clone(),
+        auth_kind: title_gen.auth_kind,
+        oauth_credentials: title_gen.oauth_credentials.clone(),
+        provider_extra_headers: title_gen.provider_extra_headers.clone(),
     })
 }
 
@@ -253,31 +294,24 @@ impl ResponseStream {
         let _ = ctx.spawn(
             async move {
                 if let Some(byop) = byop_dispatch {
-                    crate::ai::agent_providers::chat_stream::generate_byop_output(
-                        crate::ai::agent_providers::chat_stream::ByopOutputInput {
-                            params: params_clone,
-                            base_url: byop.base_url,
-                            api_key: byop.api_key,
-                            model_id: byop.model_id,
-                            api_type: byop.api_type,
-                            reasoning_effort: byop.reasoning_effort,
-                            extra_headers: byop.extra_headers,
-                            task_id: byop.root_task_id,
-                            target_task_id: byop.target_task_id,
-                            needs_create_task: byop.needs_create_task,
-                            lrc_command_id: byop.lrc_command_id,
-                            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
-                            context_window: byop.context_window,
-                            cancellation_rx,
-                        },
-                    )
-                    .await
+                    run_byop_request(byop, params_clone, cancellation_rx).await
                 } else {
-                    byop_required_response_stream(cancellation_rx).await
+                    ByopSpawnOutput {
+                        refreshed_credentials: None,
+                        stream_result: byop_required_response_stream(cancellation_rx).await,
+                    }
                 }
             },
-            move |me, stream, ctx| {
-                me.handle_response_stream_result(request_id, stream, ctx);
+            move |me, output, ctx| {
+                if let Some((provider_id, credentials)) = output.refreshed_credentials {
+                    crate::ai::agent_providers::AgentProviderOAuthSecrets::handle(ctx).update(
+                        ctx,
+                        |secrets, ctx| {
+                            secrets.set(&provider_id, credentials, ctx);
+                        },
+                    )
+                }
+                me.handle_response_stream_result(request_id, output.stream_result, ctx);
             },
         );
         Self {
@@ -360,31 +394,24 @@ impl ResponseStream {
         let _ = ctx.spawn(
             async move {
                 if let Some(byop) = byop_dispatch {
-                    crate::ai::agent_providers::chat_stream::generate_byop_output(
-                        crate::ai::agent_providers::chat_stream::ByopOutputInput {
-                            params,
-                            base_url: byop.base_url,
-                            api_key: byop.api_key,
-                            model_id: byop.model_id,
-                            api_type: byop.api_type,
-                            reasoning_effort: byop.reasoning_effort,
-                            extra_headers: byop.extra_headers,
-                            task_id: byop.root_task_id,
-                            target_task_id: byop.target_task_id,
-                            needs_create_task: byop.needs_create_task,
-                            lrc_command_id: byop.lrc_command_id,
-                            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
-                            context_window: byop.context_window,
-                            cancellation_rx,
-                        },
-                    )
-                    .await
+                    run_byop_request(byop, params, cancellation_rx).await
                 } else {
-                    byop_required_response_stream(cancellation_rx).await
+                    ByopSpawnOutput {
+                        refreshed_credentials: None,
+                        stream_result: byop_required_response_stream(cancellation_rx).await,
+                    }
                 }
             },
-            move |me, stream, ctx| {
-                me.handle_response_stream_result(request_id, stream, ctx);
+            move |me, output, ctx| {
+                if let Some((provider_id, credentials)) = output.refreshed_credentials {
+                    crate::ai::agent_providers::AgentProviderOAuthSecrets::handle(ctx).update(
+                        ctx,
+                        |secrets, ctx| {
+                            secrets.set(&provider_id, credentials, ctx);
+                        },
+                    )
+                }
+                me.handle_response_stream_result(request_id, output.stream_result, ctx);
             },
         );
     }
@@ -620,6 +647,123 @@ pub enum ResponseStreamEvent {
 
 impl Entity for ResponseStream {
     type Event = ResponseStreamEvent;
+}
+
+async fn run_byop_request(
+    byop: ByopDispatch,
+    params: api::RequestParams,
+    cancellation_rx: oneshot::Receiver<()>,
+) -> ByopSpawnOutput {
+    let (byop, refreshed_credentials) = match refresh_byop_oauth_if_needed(byop).await {
+        Ok(result) => result,
+        Err(message) => {
+            return ByopSpawnOutput {
+                refreshed_credentials: None,
+                stream_result: byop_oauth_error_response_stream(message, cancellation_rx).await,
+            };
+        }
+    };
+
+    let stream_result = crate::ai::agent_providers::chat_stream::generate_byop_output(
+        crate::ai::agent_providers::chat_stream::ByopOutputInput {
+            params,
+            base_url: byop.base_url,
+            api_key: byop.api_key,
+            model_id: byop.model_id,
+            api_type: byop.api_type,
+            reasoning_effort: byop.reasoning_effort,
+            extra_headers: byop.extra_headers,
+            task_id: byop.root_task_id,
+            target_task_id: byop.target_task_id,
+            needs_create_task: byop.needs_create_task,
+            lrc_command_id: byop.lrc_command_id,
+            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
+            context_window: byop.context_window,
+            cancellation_rx,
+        },
+    )
+    .await;
+
+    ByopSpawnOutput {
+        refreshed_credentials,
+        stream_result,
+    }
+}
+
+async fn refresh_byop_oauth_if_needed(
+    mut byop: ByopDispatch,
+) -> Result<
+    (
+        ByopDispatch,
+        Option<(String, crate::ai::agent_providers::AgentProviderOAuthCredentials)>,
+    ),
+    String,
+> {
+    let Some(credentials) = byop.oauth_credentials.clone() else {
+        return Ok((byop, None));
+    };
+    if !credentials.is_expired_or_expiring_soon() {
+        return Ok((byop, None));
+    }
+
+    match byop.auth_kind {
+        crate::settings::AgentProviderAuthKind::ApiKey => Ok((byop, None)),
+        crate::settings::AgentProviderAuthKind::CodexOAuth => {
+            let Some(refreshed) =
+                crate::ai::agent_providers::refresh_oauth_credentials_if_needed(
+                    byop.auth_kind,
+                    &credentials,
+                    &byop.provider_extra_headers,
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Codex OAuth 登录已过期或刷新失败，请在设置里重新登录 Codex OAuth。\n\n{e:#}"
+                    )
+                })?
+            else {
+                return Ok((byop, None));
+            };
+            byop.api_key = refreshed.api_key;
+            byop.extra_headers = refreshed.extra_headers;
+            byop.oauth_credentials = Some(refreshed.credentials.clone());
+            let provider_id = byop.provider_id.clone();
+            Ok((byop, Some((provider_id, refreshed.credentials))))
+        }
+        crate::settings::AgentProviderAuthKind::CopilotOAuth => {
+            let Some(refreshed) =
+                crate::ai::agent_providers::refresh_oauth_credentials_if_needed(
+                    byop.auth_kind,
+                    &credentials,
+                    &byop.provider_extra_headers,
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Copilot OAuth token exchange 失败，请确认 GitHub Copilot 账号可用后重试。\n\n{e:#}"
+                    )
+                })?
+            else {
+                return Ok((byop, None));
+            };
+            byop.api_key = refreshed.api_key;
+            byop.extra_headers = refreshed.extra_headers;
+            byop.oauth_credentials = Some(refreshed.credentials.clone());
+            let provider_id = byop.provider_id.clone();
+            Ok((byop, Some((provider_id, refreshed.credentials))))
+        }
+    }
+}
+
+async fn byop_oauth_error_response_stream(
+    message: String,
+    cancellation_rx: oneshot::Receiver<()>,
+) -> Result<api::ResponseStream, ConvertToAPITypeError> {
+    let error_stream = futures::stream::once(async {
+        Err(Arc::new(AIApiError::Other(anyhow!(message))))
+    })
+    .take_until(cancellation_rx);
+    Ok(Box::pin(error_stream))
 }
 
 async fn byop_required_response_stream(
